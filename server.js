@@ -5,6 +5,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const session = require('express-session');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -13,6 +15,22 @@ const app = express();
 // pueda hacer peticiones a esta API.
 app.use(cors());
 app.use(express.json());
+
+// Sesión de administrador. Config de cookie cross-domain (Render/Vercel)
+// pendiente de ajustar en la Etapa 2, cuando el frontend empiece a usarla.
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true },
+}));
+
+function requiereAdmin(req, res, next) {
+  if (req.session.usuario?.rol !== 'admin') {
+    return res.status(403).json({ error: 'No autorizado' });
+  }
+  next();
+}
 
 const MODO_MANTENIMIENTO = process.env.MODO_MANTENIMIENTO === 'true';
 
@@ -33,6 +51,39 @@ const supabase = createClient(
 // Ruta de prueba para verificar que el servidor está vivo
 app.get('/', (req, res) => {
   res.json({ mensaje: 'API de Registro de Asistencia - CECyT 9 funcionando correctamente' });
+});
+
+// POST /api/auth/login - autentica al administrador y abre sesión
+app.post('/api/auth/login', async (req, res) => {
+  const { correo, contrasena } = req.body;
+
+  if (!correo || !contrasena) {
+    return res.status(400).json({ error: 'correo y contrasena son obligatorios' });
+  }
+
+  const { data: usuario, error } = await supabase
+    .from('usuarios')
+    .select('*')
+    .eq('correo', correo)
+    .single();
+
+  if (error || !usuario) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+  const coincide = await bcrypt.compare(contrasena, usuario.contrasena_hash);
+  if (!coincide) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+  req.session.usuario = { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol };
+  res.json({ nombre: usuario.nombre, rol: usuario.rol });
+});
+
+// POST /api/auth/logout - cierra la sesión activa
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => res.json({ mensaje: 'Sesión cerrada' }));
+});
+
+// GET /api/auth/me - devuelve el usuario de la sesión activa, o null
+app.get('/api/auth/me', (req, res) => {
+  res.json({ usuario: req.session.usuario || null });
 });
 
 // GET /api/talleres - listar todos los talleres, ordenados por fecha
