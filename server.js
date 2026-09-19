@@ -14,6 +14,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const MODO_MANTENIMIENTO = process.env.MODO_MANTENIMIENTO === 'true';
+
+app.use('/api', (req, res, next) => {
+  if (MODO_MANTENIMIENTO) {
+    return res.status(503).json({ error: 'Servicio no disponible temporalmente' });
+  }
+  next();
+});
+
 // Cliente de Supabase. La URL y la llave se leen de variables de entorno,
 // nunca deben escribirse directamente en el código.
 const supabase = createClient(
@@ -76,6 +85,10 @@ app.get('/api/talleres/:id', async (req, res) => {
 
 // GET /api/talleres/:id/asistencias - listar los alumnos que registraron asistencia
 app.get('/api/talleres/:id/asistencias', async (req, res) => {
+  if (req.get('x-admin-key') !== process.env.ADMIN_KEY) {
+    return res.status(403).json({ error: 'No autorizado' });
+  }
+
   const { id } = req.params;
 
   const { data, error } = await supabase
@@ -103,6 +116,23 @@ app.post('/api/asistencias', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data[0]);
+});
+
+// PUT /api/talleres/:id - actualizar un taller (aún no implementado)
+app.put('/api/talleres/:id', (req, res) => {
+  res.status(501).json({ error: 'Función no implementada todavía' });
+});
+
+// DELETE /api/talleres/:id - eliminar un taller (aún no implementado)
+app.delete('/api/talleres/:id', (req, res) => {
+  res.status(501).json({ error: 'Función no implementada todavía' });
+});
+
+// GET /api/legacy - ruta artificial: Express/Node nunca generan un 505 real
+// (es un código de nivel de protocolo HTTP, no de aplicación). Se agrega solo
+// para que el grupo conozca el código; no representa una falla real de servidor.
+app.get('/api/legacy', (req, res) => {
+  res.status(505).json({ error: 'HTTP Version Not Supported' });
 });
 
 const PORT = process.env.PORT || 3001;
