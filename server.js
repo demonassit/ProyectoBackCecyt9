@@ -18,8 +18,10 @@ app.use(express.json());
 
 // Sesión de administrador. Config de cookie cross-domain (Render/Vercel)
 // pendiente de ajustar en la Etapa 2, cuando el frontend empiece a usarla.
+// El valor de respaldo es solo para que el proceso no truene si falta la
+// variable de entorno real; SESSION_SECRET debe configurarse en Render.
 app.use(session({
-  secret: process.env.SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || 'valor-inseguro-temporal-configura-SESSION_SECRET',
   resave: false,
   saveUninitialized: false,
   cookie: { httpOnly: true },
