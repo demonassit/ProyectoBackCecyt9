@@ -37,6 +37,7 @@ app.use(session({
     httpOnly: true,
     secure: enProduccion,
     sameSite: enProduccion ? 'none' : 'lax',
+    maxAge: 10 * 365 * 24 * 60 * 60 * 1000, // 10 años: la sesión de admin nunca expira
   },
 }));
 
@@ -99,6 +100,21 @@ app.post('/api/auth/logout', (req, res) => {
 // GET /api/auth/me - devuelve el usuario de la sesión activa, o null
 app.get('/api/auth/me', (req, res) => {
   res.json({ usuario: req.session.usuario || null });
+});
+
+// GET /api/admin/resumen - reporte agregado para el panel de administrador
+app.get('/api/admin/resumen', async (req, res) => {
+  const { data: talleres, error } = await supabase
+    .from('talleres')
+    .select('nombre, cupo');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { count: totalAsistencias } = await supabase
+    .from('asistencias')
+    .select('*', { count: 'exact', head: true });
+
+  res.json({ totalTalleres: talleres.length, totalAsistencias: totalAsistencias || 0, talleres });
 });
 
 // GET /api/talleres - listar todos los talleres, ordenados por fecha
