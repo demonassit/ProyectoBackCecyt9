@@ -11,6 +11,11 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
+// Render termina el HTTPS y reenvía como HTTP puertas adentro; sin esto,
+// Express no reconoce la conexión como segura y express-session se niega
+// a mandar la cookie cuando cookie.secure=true.
+app.set('trust proxy', 1);
+
 // Habilita CORS para que el frontend (en otro dominio, ej. Vercel)
 // pueda hacer peticiones a esta API. Origin específico (no "*") porque
 // las cookies de sesión requieren credentials: true.
