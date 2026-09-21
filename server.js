@@ -12,19 +12,27 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 
 // Habilita CORS para que el frontend (en otro dominio, ej. Vercel)
-// pueda hacer peticiones a esta API.
-app.use(cors());
+// pueda hacer peticiones a esta API. Origin específico (no "*") porque
+// las cookies de sesión requieren credentials: true.
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
 
-// Sesión de administrador. Config de cookie cross-domain (Render/Vercel)
-// pendiente de ajustar en la Etapa 2, cuando el frontend empiece a usarla.
-// El valor de respaldo es solo para que el proceso no truene si falta la
-// variable de entorno real; SESSION_SECRET debe configurarse en Render.
+// Sesión de administrador. En producción (Render) el frontend vive en otro
+// dominio (Vercel), así que la cookie necesita sameSite:'none' + secure:true
+// para viajar cross-domain; en local (mismo origin, http) basta con 'lax'.
+// El valor de respaldo del secret es solo para que el proceso no truene si
+// falta la variable de entorno real; SESSION_SECRET debe estar en Render.
+const enProduccion = process.env.NODE_ENV === 'production';
 app.use(session({
   secret: process.env.SESSION_SECRET || 'valor-inseguro-temporal-configura-SESSION_SECRET',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true },
+  cookie: {
+    httpOnly: true,
+    secure: enProduccion,
+    sameSite: enProduccion ? 'none' : 'lax',
+  },
 }));
 
 function requiereAdmin(req, res, next) {
@@ -99,8 +107,8 @@ app.get('/api/talleres', async (req, res) => {
   res.json(data);
 });
 
-// POST /api/talleres - crear un nuevo taller
-app.post('/api/talleres', async (req, res) => {
+// POST /api/talleres - crear un nuevo taller (solo administrador)
+app.post('/api/talleres', requiereAdmin, async (req, res) => {
   const { nombre, instructor, fecha, cupo } = req.body;
 
   if (!nombre || !fecha) {
@@ -136,12 +144,8 @@ app.get('/api/talleres/:id', async (req, res) => {
   res.json({ ...taller, asistentes: count || 0 });
 });
 
-// GET /api/talleres/:id/asistencias - listar los alumnos que registraron asistencia
-app.get('/api/talleres/:id/asistencias', async (req, res) => {
-  if (req.get('x-admin-key') !== process.env.ADMIN_KEY) {
-    return res.status(403).json({ error: 'No autorizado' });
-  }
-
+// GET /api/talleres/:id/asistencias - listar los alumnos que registraron asistencia (solo administrador)
+app.get('/api/talleres/:id/asistencias', requiereAdmin, async (req, res) => {
   const { id } = req.params;
 
   const { data, error } = await supabase
@@ -171,14 +175,39 @@ app.post('/api/asistencias', async (req, res) => {
   res.status(201).json(data[0]);
 });
 
-// PUT /api/talleres/:id - actualizar un taller (aún no implementado)
-app.put('/api/talleres/:id', (req, res) => {
-  res.status(501).json({ error: 'Función no implementada todavía' });
+// PUT /api/talleres/:id - actualizar un taller (solo administrador)
+app.put('/api/talleres/:id', requiereAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { nombre, instructor, fecha, cupo } = req.body;
+
+  if (!nombre || !fecha) {
+    return res.status(400).json({ error: 'nombre y fecha son obligatorios' });
+  }
+
+  const { data, error } = await supabase
+    .from('talleres')
+    .update({ nombre, instructor, fecha, cupo })
+    .eq('id', id)
+    .select();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data.length) return res.status(404).json({ error: 'Taller no encontrado' });
+  res.json(data[0]);
 });
 
-// DELETE /api/talleres/:id - eliminar un taller (aún no implementado)
-app.delete('/api/talleres/:id', (req, res) => {
-  res.status(501).json({ error: 'Función no implementada todavía' });
+// DELETE /api/talleres/:id - eliminar un taller (solo administrador)
+app.delete('/api/talleres/:id', requiereAdmin, async (req, res) => {
+  const { id } = req.params;
+
+  const { data, error } = await supabase
+    .from('talleres')
+    .delete()
+    .eq('id', id)
+    .select();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data.length) return res.status(404).json({ error: 'Taller no encontrado' });
+  res.status(204).send();
 });
 
 // GET /api/legacy - ruta artificial: Express/Node nunca generan un 505 real
