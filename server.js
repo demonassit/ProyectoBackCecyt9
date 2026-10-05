@@ -191,6 +191,8 @@ app.get('/api/talleres/:id', async (req, res) => {
 app.get('/api/talleres/:id/asistencias', requiereAdmin, async (req, res) => {
   const { id } = req.params;
 
+  if (!FORMATO_UUID.test(id)) return res.status(404).json({ error: 'Taller no encontrado' });
+
   const { data, error } = await supabase
     .from('asistencias')
     .select('*')
@@ -256,6 +258,8 @@ app.post('/api/asistencias', async (req, res) => {
 // PUT /api/talleres/:id - actualizar un taller (solo administrador)
 app.put('/api/talleres/:id', requiereAdmin, async (req, res) => {
   const { id } = req.params;
+
+  if (!FORMATO_UUID.test(id)) return res.status(404).json({ error: 'Taller no encontrado' });
   const { nombre, instructor, fecha, cupo } = req.body;
 
   if (!nombre || !fecha) {
@@ -276,6 +280,8 @@ app.put('/api/talleres/:id', requiereAdmin, async (req, res) => {
 // DELETE /api/talleres/:id - eliminar un taller (solo administrador)
 app.delete('/api/talleres/:id', requiereAdmin, async (req, res) => {
   const { id } = req.params;
+
+  if (!FORMATO_UUID.test(id)) return res.status(404).json({ error: 'Taller no encontrado' });
 
   const { data, error } = await supabase
     .from('talleres')
