@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -37,15 +38,37 @@ app.use(session({
     httpOnly: true,
     secure: enProduccion,
     sameSite: enProduccion ? 'none' : 'lax',
+    maxAge: 2 * 60 * 60 * 1000, // 2 horas de inactividad
   },
+  rolling: true, // cada petición renueva las 2 horas
 }));
 
+// 401 = no hay sesión (no sabemos quién eres); 403 = hay sesión pero sin permiso.
 function requiereAdmin(req, res, next) {
-  if (req.session.usuario?.rol !== 'admin') {
-    return res.status(403).json({ error: 'No autorizado' });
+  if (!req.session.usuario) {
+    return res.status(401).json({ error: 'Inicia sesión para continuar' });
+  }
+  if (req.session.usuario.rol !== 'admin') {
+    return res.status(403).json({ error: 'No tienes permiso para esta acción' });
   }
   next();
 }
+
+// Límite de intentos de login: 5 fallidos cada 15 minutos por IP + correo.
+// Se combina con el correo para que todo un salón detrás de la misma IP
+// (la red de la escuela) no se bloquee por los errores de un solo alumno.
+const limiteLogin = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  skipSuccessfulRequests: true,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip)}|${String(req.body?.correo || '').toLowerCase()}`,
+  message: { error: 'Demasiados intentos fallidos. Intenta de nuevo en 15 minutos.' },
+});
+
+const FORMATO_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FORMATO_BOLETA = /^\d{10}$/;
 
 const MODO_MANTENIMIENTO = process.env.MODO_MANTENIMIENTO === 'true';
 
@@ -69,7 +92,7 @@ app.get('/', (req, res) => {
 });
 
 // POST /api/auth/login - autentica al administrador y abre sesión
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', limiteLogin, async (req, res) => {
   const { correo, contrasena } = req.body;
 
   if (!correo || !contrasena) {
@@ -99,6 +122,21 @@ app.post('/api/auth/logout', (req, res) => {
 // GET /api/auth/me - devuelve el usuario de la sesión activa, o null
 app.get('/api/auth/me', (req, res) => {
   res.json({ usuario: req.session.usuario || null });
+});
+
+// GET /api/admin/resumen - reporte agregado para el panel de administrador
+app.get('/api/admin/resumen', requiereAdmin, async (req, res) => {
+  const { data: talleres, error } = await supabase
+    .from('talleres')
+    .select('nombre, cupo');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { count: totalAsistencias } = await supabase
+    .from('asistencias')
+    .select('*', { count: 'exact', head: true });
+
+  res.json({ totalTalleres: talleres.length, totalAsistencias: totalAsistencias || 0, talleres });
 });
 
 // GET /api/talleres - listar todos los talleres, ordenados por fecha
@@ -165,15 +203,50 @@ app.get('/api/talleres/:id/asistencias', requiereAdmin, async (req, res) => {
 
 // POST /api/asistencias - registrar la asistencia de un alumno a un taller
 app.post('/api/asistencias', async (req, res) => {
-  const { taller_id, nombre_alumno, boleta } = req.body;
+  const { taller_id, boleta } = req.body;
+  const nombre_alumno = typeof req.body.nombre_alumno === 'string' ? req.body.nombre_alumno.trim() : '';
 
   if (!taller_id || !nombre_alumno || !boleta) {
     return res.status(400).json({ error: 'taller_id, nombre_alumno y boleta son obligatorios' });
   }
+  if (!FORMATO_BOLETA.test(String(boleta))) {
+    return res.status(400).json({ error: 'La boleta debe tener exactamente 10 dígitos' });
+  }
+  if (!FORMATO_UUID.test(String(taller_id))) {
+    return res.status(404).json({ error: 'Taller no encontrado' });
+  }
+
+  const { data: taller } = await supabase
+    .from('talleres')
+    .select('id, cupo')
+    .eq('id', taller_id)
+    .maybeSingle();
+
+  if (!taller) return res.status(404).json({ error: 'Taller no encontrado' });
+
+  const { data: previa } = await supabase
+    .from('asistencias')
+    .select('id')
+    .eq('taller_id', taller_id)
+    .eq('boleta', String(boleta))
+    .limit(1);
+
+  if (previa?.length) {
+    return res.status(409).json({ error: 'Esta boleta ya está registrada en el taller' });
+  }
+
+  const { count } = await supabase
+    .from('asistencias')
+    .select('*', { count: 'exact', head: true })
+    .eq('taller_id', taller_id);
+
+  if (taller.cupo != null && count >= taller.cupo) {
+    return res.status(409).json({ error: 'El taller ya no tiene cupo disponible' });
+  }
 
   const { data, error } = await supabase
     .from('asistencias')
-    .insert([{ taller_id, nombre_alumno, boleta }])
+    .insert([{ taller_id, nombre_alumno, boleta: String(boleta) }])
     .select();
 
   if (error) return res.status(500).json({ error: error.message });
